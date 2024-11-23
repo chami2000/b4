@@ -2,8 +2,8 @@
 <launch4jConfig>
   <dontWrapJar>false</dontWrapJar>
   <headerType>gui</headerType>
-  <jar>target/lte-band-control-1.0-SNAPSHOT-jar-with-dependencies.jar</jar>
-  <outfile>target/LTEBandControl.exe</outfile>
+  <jar>${GITHUB_WORKSPACE}/target/lte-band-control-1.0-SNAPSHOT-jar-with-dependencies.jar</jar>
+  <outfile>${GITHUB_WORKSPACE}/target/LTEBandControl.exe</outfile>
   <errTitle>LTE Band Control</errTitle>
   <cmdLine></cmdLine>
   <chdir>.</chdir>
