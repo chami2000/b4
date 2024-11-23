@@ -1,0 +1,70 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up JDK 11
+      uses: actions/setup-java@v3
+      with:
+        java-version: '11'
+        distribution: 'temurin'
+        cache: maven
+        
+    - name: Build with Maven
+      run: mvn clean package assembly:single
+        
+    - name: Download Launch4j
+      run: |
+        curl -L https://sourceforge.net/projects/launch4j/files/launch4j-3/3.50/launch4j-3.50-win32.zip/download -o launch4j.zip
+        7z x launch4j.zip
+      working-directory: ${{ github.workspace }}
+        
+    - name: Setup Launch4j config
+      run: |
+        $configContent = Get-Content -Path launch4j-config.xml -Raw
+        $configContent = $configContent.Replace('${GITHUB_WORKSPACE}', $env:GITHUB_WORKSPACE)
+        $configContent | Set-Content -Path launch4j-config.xml -Force
+      shell: pwsh
+        
+    - name: Create EXE
+      run: |
+        $configPath = "${{ github.workspace }}\launch4j-config.xml"
+        $launchExePath = "${{ github.workspace }}\launch4j\launch4j.exe"
+        & $launchExePath $configPath
+      shell: pwsh
+
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ${{ github.workspace }}/target/LTEBandControl.exe
+        name: Release ${{ github.ref_name }}
+        body: |
+          LTE Band Control Application Release ${{ github.ref_name }}
+          
+          ## What's New
+          - Automated release build
+          - Windows executable included
+          
+          ## Installation
+          Download LTEBandControl.exe and run it on your Windows system.
+          
+          ## Requirements
+          - Windows OS
+          - Java 11 or higher installed
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
