@@ -1,263 +1,215 @@
 import javax.swing.*;
-import javax.swing.border.*;
 import java.awt.*;
-import java.awt.event.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.net.URI;
-import java.net.http.*;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.prefs.Preferences;
-import com.google.gson.*;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 public class LTEBandControlApp {
-    // RouterControl class remains the same as before
+
     static class RouterControl {
-        // ... (previous RouterControl implementation)
+        private String routerIp;
+        private String username;
+        private String password;
+        private String sessionId;
+
+        public RouterControl(String routerIp, String username, String password) {
+            this.routerIp = routerIp;
+            this.username = username;
+            this.password = password;
+            this.sessionId = null;
+        }
+
+        public String getSessionId() {
+            try {
+                HttpClient client = HttpClient.newHttpClient();
+                URI uri = new URI("http://" + routerIp + "/cgi-bin/lua.cgi");
+                JsonObject data = new JsonObject();
+                data.addProperty("cmd", 100);
+                data.addProperty("method", "POST");
+                data.addProperty("username", username);
+                data.addProperty("passwd", password);
+
+                HttpRequest request = HttpRequest.newBuilder(uri)
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(data.toString()))
+                        .build();
+
+                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() == 200) {
+                    JsonObject result = JsonParser.parseString(response.body()).getAsJsonObject();
+                    if (result.get("success").getAsBoolean()) {
+                        sessionId = result.get("sessionId").getAsString();
+                        return sessionId;
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
+
+        public boolean changeLTEBands(String[] bands) {
+            if (sessionId == null && getSessionId() == null) {
+                return false;
+            }
+
+            try {
+                HttpClient client = HttpClient.newHttpClient();
+                URI uri = new URI("http://" + routerIp + "/cgi-bin/lua.cgi");
+                JsonObject data = new JsonObject();
+                data.addProperty("cmd", 166);
+                data.addProperty("method", "POST");
+                data.addProperty("sessionId", sessionId);
+                data.add("band", JsonParser.parseString(java.util.Arrays.toString(bands)));
+
+                HttpRequest request = HttpRequest.newBuilder(uri)
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(data.toString()))
+                        .build();
+
+                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                return response.statusCode() == 200 && JsonParser.parseString(response.body())
+                        .getAsJsonObject()
+                        .get("success")
+                        .getAsBoolean();
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return false;
+        }
+
+        public String[] getCurrentBands() {
+            if (sessionId == null && getSessionId() == null) {
+                return null;
+            }
+
+            try {
+                HttpClient client = HttpClient.newHttpClient();
+                URI uri = new URI("http://" + routerIp + "/cgi-bin/lua.cgi");
+                JsonObject data = new JsonObject();
+                data.addProperty("cmd", 165);
+                data.addProperty("method", "GET");
+                data.addProperty("sessionId", sessionId);
+
+                HttpRequest request = HttpRequest.newBuilder(uri)
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(data.toString()))
+                        .build();
+
+                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() == 200) {
+                    JsonObject result = JsonParser.parseString(response.body()).getAsJsonObject();
+                    if (result.get("success").getAsBoolean()) {
+                        String[] bands = result.getAsJsonArray("lockband")
+                                .toString()
+                                .replace("[", "")
+                                .replace("]", "")
+                                .replace("\"", "")
+                                .split(",");
+                        return bands;
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
     }
 
-    public static class ModernDarkUI {
-        // Custom colors for dark theme
-        static final Color BACKGROUND = new Color(32, 33, 36);
-        static final Color SURFACE = new Color(41, 42, 45);
-        static final Color PRIMARY = new Color(138, 180, 248);
-        static final Color SECONDARY = new Color(241, 243, 244);
-        static final Color ERROR = new Color(242, 139, 130);
-        static final Color SUCCESS = new Color(129, 201, 149);
+    public static class CredentialsManager {
+        private static final Preferences prefs = Preferences.userRoot().node("LTEBandControlApp");
+
+        public static void saveCredentials(String username, String password) {
+            prefs.put("username", username);
+            prefs.put("password", password); // Note: Encrypt for production!
+        }
+
+        public static String[] getCredentials() {
+            String username = prefs.get("username", "");
+            String password = prefs.get("password", "");
+            return new String[]{username, password};
+        }
+
+        public static void clearCredentials() {
+            prefs.remove("username");
+            prefs.remove("password");
+        }
     }
 
     public static class LTEBandControlGUI {
         private RouterControl router;
         private JFrame frame;
-        private JTextField ipField;
-        private JTextField usernameField;
-        private JPasswordField passwordField;
+        private JTextField ipField, usernameField, passwordField;
         private JCheckBox[] bandCheckBoxes;
         private JLabel currentBandsLabel;
         private JButton connectButton, changeBandsButton;
-        private JCheckBox rememberCredentials;
         private String[] availableBands = {"EUTRAN_BAND1", "EUTRAN_BAND3", "EUTRAN_BAND5", "EUTRAN_BAND38", "EUTRAN_BAND41"};
-        private Preferences prefs;
 
         public LTEBandControlGUI() {
-            setupPreferences();
-            createAndShowGUI();
-            loadSavedCredentials();
-        }
-
-        private void setupPreferences() {
-            prefs = Preferences.userNodeForPackage(LTEBandControlApp.class);
-        }
-
-        private void createAndShowGUI() {
+            setDarkMode();
             frame = new JFrame("LTE Band Control");
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.getContentPane().setBackground(ModernDarkUI.BACKGROUND);
-            frame.setSize(500, 600);
+            frame.setSize(400, 400);
+            frame.setLayout(new GridLayout(10, 2));
 
-            // Main panel with padding
-            JPanel mainPanel = new JPanel();
-            mainPanel.setLayout(new BoxLayout(mainPanel, BoxLayout.Y_AXIS));
-            mainPanel.setBackground(ModernDarkUI.BACKGROUND);
-            mainPanel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+            frame.add(new JLabel("Router IP:"));
+            ipField = new JTextField("192.168.1.1");
+            frame.add(ipField);
 
-            // Add components
-            addConnectionPanel(mainPanel);
-            addBandSelectionPanel(mainPanel);
-            addStatusPanel(mainPanel);
+            frame.add(new JLabel("Username:"));
+            usernameField = new JTextField();
+            frame.add(usernameField);
 
-            // Scroll pane for responsiveness
-            JScrollPane scrollPane = new JScrollPane(mainPanel);
-            scrollPane.setBorder(null);
-            scrollPane.getVerticalScrollBar().setUI(new ModernScrollBarUI());
-            frame.add(scrollPane);
+            frame.add(new JLabel("Password:"));
+            passwordField = new JPasswordField();
+            frame.add(passwordField);
 
-            frame.setLocationRelativeTo(null);
-            frame.setVisible(true);
-        }
+            // Load saved credentials
+            String[] credentials = CredentialsManager.getCredentials();
+            usernameField.setText(credentials[0]);
+            passwordField.setText(credentials[1]);
 
-        private void addConnectionPanel(JPanel parent) {
-            JPanel panel = createPanelWithTitle("Connection Settings");
-            
-            // Grid for form fields
-            JPanel formPanel = new JPanel(new GridBagLayout());
-            formPanel.setBackground(ModernDarkUI.SURFACE);
-            GridBagConstraints gbc = new GridBagConstraints();
-            gbc.fill = GridBagConstraints.HORIZONTAL;
-            gbc.insets = new Insets(5, 5, 5, 5);
-
-            // Router IP
-            gbc.gridx = 0; gbc.gridy = 0;
-            formPanel.add(createLabel("Router IP:"), gbc);
-            gbc.gridx = 1;
-            ipField = createTextField("192.168.1.1");
-            formPanel.add(ipField, gbc);
-
-            // Username
-            gbc.gridx = 0; gbc.gridy = 1;
-            formPanel.add(createLabel("Username:"), gbc);
-            gbc.gridx = 1;
-            usernameField = createTextField("administrator");
-            formPanel.add(usernameField, gbc);
-
-            // Password
-            gbc.gridx = 0; gbc.gridy = 2;
-            formPanel.add(createLabel("Password:"), gbc);
-            gbc.gridx = 1;
-            passwordField = createPasswordField();
-            formPanel.add(passwordField, gbc);
-
-            // Remember credentials checkbox
-            gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 2;
-            rememberCredentials = new JCheckBox("Remember credentials");
-            styleCheckBox(rememberCredentials);
-            formPanel.add(rememberCredentials, gbc);
-
-            // Connect button
-            gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 2;
-            connectButton = createButton("Connect");
+            connectButton = new JButton("Connect");
             connectButton.addActionListener(e -> connectRouter());
-            formPanel.add(connectButton, gbc);
+            frame.add(connectButton);
 
-            panel.add(formPanel);
-            parent.add(panel);
-            parent.add(Box.createRigidArea(new Dimension(0, 10)));
-        }
-
-        private void addBandSelectionPanel(JPanel parent) {
-            JPanel panel = createPanelWithTitle("LTE Band Selection");
-            
+            frame.add(new JLabel("Select LTE Bands:"));
             JPanel bandPanel = new JPanel();
-            bandPanel.setLayout(new BoxLayout(bandPanel, BoxLayout.Y_AXIS));
-            bandPanel.setBackground(ModernDarkUI.SURFACE);
-            
+            bandPanel.setLayout(new GridLayout(5, 1));
             bandCheckBoxes = new JCheckBox[availableBands.length];
             for (int i = 0; i < availableBands.length; i++) {
                 bandCheckBoxes[i] = new JCheckBox("Band " + availableBands[i].split("_")[1]);
-                styleCheckBox(bandCheckBoxes[i]);
                 bandPanel.add(bandCheckBoxes[i]);
-                bandPanel.add(Box.createRigidArea(new Dimension(0, 5)));
             }
+            frame.add(bandPanel);
 
-            changeBandsButton = createButton("Change Bands");
+            changeBandsButton = new JButton("Change Bands");
             changeBandsButton.setEnabled(false);
             changeBandsButton.addActionListener(e -> changeBands());
-            
-            panel.add(bandPanel);
-            panel.add(Box.createRigidArea(new Dimension(0, 10)));
-            panel.add(changeBandsButton);
-            
-            parent.add(panel);
-            parent.add(Box.createRigidArea(new Dimension(0, 10)));
-        }
+            frame.add(changeBandsButton);
 
-        private void addStatusPanel(JPanel parent) {
-            JPanel panel = createPanelWithTitle("Status");
-            
-            currentBandsLabel = createLabel("Current Bands: None");
-            currentBandsLabel.setHorizontalAlignment(SwingConstants.CENTER);
-            panel.add(currentBandsLabel);
-            
-            parent.add(panel);
-        }
+            currentBandsLabel = new JLabel("Current Bands: None");
+            frame.add(currentBandsLabel);
 
-        private JPanel createPanelWithTitle(String title) {
-            JPanel panel = new JPanel();
-            panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-            panel.setBackground(ModernDarkUI.SURFACE);
-            panel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder(
-                    BorderFactory.createLineBorder(ModernDarkUI.PRIMARY),
-                    title,
-                    TitledBorder.LEFT,
-                    TitledBorder.TOP,
-                    null,
-                    ModernDarkUI.PRIMARY
-                ),
-                BorderFactory.createEmptyBorder(10, 10, 10, 10)
-            ));
-            return panel;
-        }
-
-        private JLabel createLabel(String text) {
-            JLabel label = new JLabel(text);
-            label.setForeground(ModernDarkUI.SECONDARY);
-            return label;
-        }
-
-        private JTextField createTextField(String defaultText) {
-            JTextField field = new JTextField(defaultText);
-            field.setBackground(ModernDarkUI.BACKGROUND);
-            field.setForeground(ModernDarkUI.SECONDARY);
-            field.setCaretColor(ModernDarkUI.SECONDARY);
-            field.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(ModernDarkUI.PRIMARY),
-                BorderFactory.createEmptyBorder(5, 5, 5, 5)
-            ));
-            return field;
-        }
-
-        private JPasswordField createPasswordField() {
-            JPasswordField field = new JPasswordField();
-            field.setBackground(ModernDarkUI.BACKGROUND);
-            field.setForeground(ModernDarkUI.SECONDARY);
-            field.setCaretColor(ModernDarkUI.SECONDARY);
-            field.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(ModernDarkUI.PRIMARY),
-                BorderFactory.createEmptyBorder(5, 5, 5, 5)
-            ));
-            return field;
-        }
-
-        private JButton createButton(String text) {
-            JButton button = new JButton(text);
-            button.setBackground(ModernDarkUI.PRIMARY);
-            button.setForeground(Color.BLACK);
-            button.setFocusPainted(false);
-            button.setBorder(BorderFactory.createEmptyBorder(8, 15, 8, 15));
-            button.setCursor(new Cursor(Cursor.HAND_CURSOR));
-            return button;
-        }
-
-        private void styleCheckBox(JCheckBox checkBox) {
-            checkBox.setBackground(ModernDarkUI.SURFACE);
-            checkBox.setForeground(ModernDarkUI.SECONDARY);
-            checkBox.setFocusPainted(false);
-        }
-
-        private void saveCredentials() {
-            if (rememberCredentials.isSelected()) {
-                prefs.put("routerIp", ipField.getText());
-                prefs.put("username", usernameField.getText());
-                prefs.put("password", new String(passwordField.getPassword()));
-                prefs.putBoolean("rememberCredentials", true);
-            } else {
-                clearSavedCredentials();
-            }
-        }
-
-        private void loadSavedCredentials() {
-            if (prefs.getBoolean("rememberCredentials", false)) {
-                ipField.setText(prefs.get("routerIp", "192.168.1.1"));
-                usernameField.setText(prefs.get("username", "administrator"));
-                passwordField.setText(prefs.get("password", ""));
-                rememberCredentials.setSelected(true);
-            }
-        }
-
-        private void clearSavedCredentials() {
-            prefs.remove("routerIp");
-            prefs.remove("username");
-            prefs.remove("password");
-            prefs.remove("rememberCredentials");
+            frame.setVisible(true);
         }
 
         private void connectRouter() {
-            router = new RouterControl(ipField.getText(), usernameField.getText(), new String(passwordField.getPassword()));
+            router = new RouterControl(ipField.getText(), usernameField.getText(), passwordField.getText());
             if (router.getSessionId() != null) {
-                showMessage("Connected to Router!", "Success", JOptionPane.INFORMATION_MESSAGE);
+                JOptionPane.showMessageDialog(frame, "Connected to Router!", "Success", JOptionPane.INFORMATION_MESSAGE);
                 changeBandsButton.setEnabled(true);
+                CredentialsManager.saveCredentials(usernameField.getText(), new String(((JPasswordField) passwordField).getPassword()));
                 updateCurrentBands();
-                saveCredentials();
             } else {
-                showMessage("Failed to Connect!", "Error", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(frame, "Failed to Connect!", "Error", JOptionPane.ERROR_MESSAGE);
             }
         }
 
@@ -267,10 +219,10 @@ public class LTEBandControlApp {
                     .map(cb -> cb.getText().replace("Band ", "EUTRAN_BAND"))
                     .toArray(String[]::new);
             if (router.changeLTEBands(selectedBands)) {
-                showMessage("Bands Changed Successfully!", "Success", JOptionPane.INFORMATION_MESSAGE);
+                JOptionPane.showMessageDialog(frame, "Bands Changed Successfully!", "Success", JOptionPane.INFORMATION_MESSAGE);
                 updateCurrentBands();
             } else {
-                showMessage("Failed to Change Bands!", "Error", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(frame, "Failed to Change Bands!", "Error", JOptionPane.ERROR_MESSAGE);
             }
         }
 
@@ -286,46 +238,30 @@ public class LTEBandControlApp {
             }
         }
 
-        private void showMessage(String message, String title, int messageType) {
-            UIManager.put("OptionPane.background", ModernDarkUI.SURFACE);
-            UIManager.put("Panel.background", ModernDarkUI.SURFACE);
-            UIManager.put("OptionPane.messageForeground", ModernDarkUI.SECONDARY);
-            JOptionPane.showMessageDialog(frame, message, title, messageType);
-        }
-    }
-
-    // Custom ScrollBar UI for dark theme
-    static class ModernScrollBarUI extends BasicScrollBarUI {
-        @Override
-        protected void configureScrollBarColors() {
-            this.thumbColor = ModernDarkUI.PRIMARY;
-            this.trackColor = ModernDarkUI.SURFACE;
-        }
-
-        @Override
-        protected JButton createDecreaseButton(int orientation) {
-            return createZeroButton();
-        }
-
-        @Override
-        protected JButton createIncreaseButton(int orientation) {
-            return createZeroButton();
-        }
-
-        private JButton createZeroButton() {
-            JButton button = new JButton();
-            button.setPreferredSize(new Dimension(0, 0));
-            return button;
+        private void setDarkMode() {
+            try {
+                UIManager.setLookAndFeel("javax.swing.plaf.nimbus.NimbusLookAndFeel");
+                UIManager.put("control", new Color(30, 30, 30));
+                UIManager.put("info", new Color(50, 50, 50));
+                UIManager.put("nimbusBase", new Color(50, 50, 50));
+                UIManager.put("nimbusAlertYellow", new Color(248, 187, 0));
+                UIManager.put("nimbusDisabledText", new Color(100, 100, 100));
+                UIManager.put("nimbusFocus", new Color(115, 164, 209));
+                UIManager.put("nimbusGreen", new Color(176, 179, 50));
+                UIManager.put("nimbusInfoBlue", new Color(66, 139, 221));
+                UIManager.put("nimbusLightBackground", new Color(30, 30, 30));
+                UIManager.put("nimbusOrange", new Color(191, 98, 4));
+                UIManager.put("nimbusRed", new Color(169, 46, 34));
+                UIManager.put("nimbusSelectedText", new Color(255, 255, 255));
+                UIManager.put("nimbusSelectionBackground", new Color(60, 60, 60));
+                UIManager.put("text", new Color(230, 230, 230));
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
     }
 
     public static void main(String[] args) {
-        try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        
-        SwingUtilities.invokeLater(() -> new LTEBandControlGUI());
+        SwingUtilities.invokeLater(LTEBandControlGUI::new);
     }
 }
