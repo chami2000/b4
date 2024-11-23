@@ -27,13 +27,33 @@ jobs:
       run: |
         curl -L https://sourceforge.net/projects/launch4j/files/launch4j-3/3.50/launch4j-3.50-win32.zip/download -o launch4j.zip
         7z x launch4j.zip
+      working-directory: ${{ github.workspace }}
+        
+    - name: Setup Launch4j config
+      run: |
+        $configContent = Get-Content -Path launch4j-config.xml -Raw
+        $configContent = $configContent.Replace('${GITHUB_WORKSPACE}', $env:GITHUB_WORKSPACE)
+        $configContent | Set-Content -Path launch4j-config.xml -Force
+      shell: pwsh
         
     - name: Create EXE
       run: |
-        .\launch4j\launch4j.exe launch4j-config.xml
+        $configPath = "${{ github.workspace }}\launch4j-config.xml"
+        $launchExePath = "${{ github.workspace }}\launch4j\launch4j.exe"
+        Write-Host "Config path: $configPath"
+        Write-Host "Launch4j path: $launchExePath"
+        Write-Host "Config content:"
+        Get-Content $configPath
+        & $launchExePath $configPath
+      shell: pwsh
+        
+    - name: List target directory
+      run: |
+        dir target
+      shell: cmd
         
     - name: Upload EXE artifact
       uses: actions/upload-artifact@v3
       with:
         name: LTEBandControl
-        path: target/LTEBandControl.exe
+        path: ${{ github.workspace }}/target/LTEBandControl.exe
